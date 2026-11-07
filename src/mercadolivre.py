@@ -177,6 +177,46 @@ def product_details(url):
 
     return {
         "url": url, "id": product_id(url), "title": title, "price": price, "sold": sold,
+        "video_source": "anuncio" if (full or previews) else "",
         "description": desc, "features": feats,
         "images": imgs[:10], "videos": full + previews, "youtube_ids": list(dict.fromkeys(yt)),
     }
+
+
+# ---------------- vídeo em outros anúncios do MESMO produto ----------------
+
+STOP = {"kit", "com", "de", "da", "do", "para", "pra", "e", "em", "a", "o", "cor", "un", "unidades",
+        "original", "novo", "promocao", "oferta", "frete", "gratis", "pecas", "pcs"}
+
+
+def search_query(title, words=5):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
+    toks = [w for w in re.findall(r"[a-z]+", t) if w not in STOP and len(w) > 2]
+    return " ".join(toks[:words])
+
+
+def find_videos_other_listings(title, exclude_id, max_pages=5):
+    """Procura o mesmo produto em outros anúncios do ML e pega os vídeos deles."""
+    q = search_query(title)
+    if not q:
+        return []
+    slug = q.replace(" ", "-")
+    try:
+        cards = _parse_cards(_get(f"https://lista.mercadolivre.com.br/{slug}"), f"alt:{q}")
+    except Blocked as e:
+        print("  aviso:", e)
+        return []
+    vids = []
+    for c in [c for c in cards if c["id"] != exclude_id][:max_pages]:
+        try:
+            d = product_details(c["url"])
+            if d["videos"]:
+                print(f"  vídeo achado em outro anúncio: {c['title'][:60]}")
+                vids += d["videos"]
+        except Blocked:
+            continue
+        if len(vids) >= C.MAX_CLIPS * 2:
+            break
+        time.sleep(1 + random.random())
+    return vids

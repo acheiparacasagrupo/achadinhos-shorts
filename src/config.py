@@ -63,6 +63,9 @@ FONTS_DIR = ROOT / "assets" / "fonts"
 # Shorts: sempre vertical e abaixo de 60 s
 MAX_SHORT_SECONDS = 58.0
 MUSIC_VOLUME = float(env("MUSIC_VOLUME", "0.10"))
+# Se o anúncio não tiver vídeo, procurar o vídeo do produto no YouTube (via yt-dlp)
+ALLOW_YOUTUBE_SEARCH = env("ALLOW_YOUTUBE_SEARCH", "true").lower() == "true"
+YT_COOKIES_FILE = env("YT_COOKIES_FILE", str(ROOT / "cookies.txt"))
 KEEP_ORIGINAL_AUDIO = env("KEEP_ORIGINAL_AUDIO", "false").lower() == "true"
 
 # ---------- YouTube ----------

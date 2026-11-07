@@ -89,7 +89,7 @@ def pick_products(history, n):
         raise RuntimeError("Nenhum candidato (Mercado Livre pode ter bloqueado o IP do runner — veja o README).")
     cands = cands[: C.MAX_CANDIDATES]
     print("3) Gemini escolhendo os que mais resolvem dores...")
-    ranked = ai.rank_products(cands, k=max(6, n * 4))
+    ranked = ai.rank_products(cands, k=max(10, n * 5))
     for r in ranked[:8]:
         print(f"   [{r['score']}] {r['title'][:70]} — {r['dor']}")
     return ranked
@@ -102,14 +102,15 @@ def process(cand, history):
     p["title"] = p["title"] or cand["title"]
     p["price"] = p["price"] or cand.get("price", "")
     print(f"   {len(p['videos'])} vídeos reais, {len(p['images'])} fotos, vendidos: {p['sold'] or '?'}")
-    if not p["videos"] and len(p["images"]) < 3:
-        raise RuntimeError("produto sem vídeo e com poucas fotos — pulando")
-
-    meta = ai.write_script(p)
-    print("   narração:", meta["narration"])
 
     tmp = tempfile.mkdtemp(prefix="short_")
     try:
+        # 1º garante o vídeo real (sem vídeo = pula o produto, sem gastar Gemini)
+        base, kind = video.build_base(p, tmp)
+        print(f"   vídeo real obtido de: {kind}")
+
+        meta = ai.write_script(p)
+        print("   narração:", meta["narration"])
         mp3, dur, words = tts.synthesize(meta["narration"], f"{tmp}/narracao")
         print(f"   narração: {dur:.1f}s")
         if dur > C.MAX_SHORT_SECONDS - 1:
@@ -117,7 +118,7 @@ def process(cand, history):
         C.OUT_DIR.mkdir(exist_ok=True)
         slug = re.sub(r"[^a-z0-9]+", "-", _norm(meta["product_label"]))[:40].strip("-")
         out = str(C.OUT_DIR / f"{NOW:%Y%m%d-%H%M}-{slug}.mp4")
-        out, kind, total = video.render(p, mp3, dur, words, meta["hook_overlay"], out, tmp)
+        out, total = video.render(base, mp3, dur, words, meta["hook_overlay"], out, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

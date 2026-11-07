@@ -1,13 +1,12 @@
-"""Montagem do Short com FFmpeg: vídeos reais do anúncio (ou slideshow das
-fotos como plano B) em 1080x1920, narração, legendas animadas, gancho no
+"""Montagem do Short com FFmpeg: vídeo REAL do produto (anúncio, outros
+anúncios ou YouTube) em 1080x1920, narração, legendas animadas, gancho no
 topo e CTA do grupo no final. Sempre < 60 s (formato Shorts)."""
 import glob
 import os
 import random
+import re
 import shutil
 import subprocess
-
-import requests
 
 from . import config as C
 from .tts import _duration
@@ -45,43 +44,43 @@ def _clip_from_url(url, out):
     return _duration(out)
 
 
-def _clip_from_youtube(vid, out, tmp):
+def _yt_dlp_base():
+    cmd = ["yt-dlp", "-q", "--no-warnings", "--no-playlist"]
+    if os.path.exists(C.YT_COOKIES_FILE):
+        cmd += ["--cookies", C.YT_COOKIES_FILE]
+    return cmd
+
+
+def _clip_from_youtube(ref, out, tmp):
+    """ref = id do vídeo ou URL. Baixa (máx. 1080p) e normaliza."""
     if not shutil.which("yt-dlp"):
         raise RuntimeError("yt-dlp não instalado")
-    raw = os.path.join(tmp, f"yt_{vid}.mp4")
-    run(["yt-dlp", "-q", "-f", "mp4[height<=1080]/best", "-o", raw, f"https://www.youtube.com/watch?v={vid}"])
+    url = ref if ref.startswith("http") else f"https://www.youtube.com/watch?v={ref}"
+    raw = os.path.join(tmp, "yt_" + re.sub(r"[^A-Za-z0-9_-]", "", url)[-15:] + ".mp4")
+    run([*_yt_dlp_base(), "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+         "--merge-output-format", "mp4", "--download-sections", f"*0-{int(C.MAX_CLIP_SECONDS)+1}",
+         "-o", raw, url])
     return _clip_from_url(raw, out)
 
 
-def _slideshow(images, out, tmp, seconds=3.2):
-    """Plano B: fotos do anúncio com zoom suave (Ken Burns)."""
-    parts = []
-    for i, url in enumerate(images[:8]):
-        img = os.path.join(tmp, f"img{i}.jpg")
+def youtube_search(query, n=8):
+    """Busca vídeos curtos do produto no YouTube (Shorts/reviews) e devolve URLs."""
+    if not shutil.which("yt-dlp") or not query:
+        return []
+    p = subprocess.run([*_yt_dlp_base(), "--flat-playlist", "--print", "%(id)s|%(duration)s|%(title)s",
+                        f"ytsearch{n}:{query}"], capture_output=True, text=True, timeout=120)
+    out = []
+    for line in p.stdout.splitlines():
         try:
-            r = requests.get(url, headers={"User-Agent": C.USER_AGENT}, timeout=30)
-            r.raise_for_status()
-            raw = img + ".src"
-            open(raw, "wb").write(r.content)
-            run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-frames:v", "1", img])
-        except Exception as e:  # noqa: BLE001
-            print("  imagem falhou:", e)
+            vid, dur, title = line.split("|", 2)
+            dur = float(dur) if dur not in ("NA", "None", "") else 0
+        except ValueError:
             continue
-        seg = os.path.join(tmp, f"slide{i}.mp4")
-        frames = int(seconds * C.FPS)
-        zin = random.choice([True, False])
-        z = "min(zoom+0.0009,1.15)" if zin else "if(eq(on,0),1.15,max(zoom-0.0009,1.0))"
-        vf = (f"{NORMALIZE},scale={C.W*3//2}:{C.H*3//2},"
-              f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={C.W}x{C.H}:fps={C.FPS},format=yuv420p")
-        run(["ffmpeg", "-y", "-loglevel", "error", "-loop", "1", "-i", img, "-f", "lavfi",
-             "-i", "anullsrc=r=44100:cl=stereo", "-t", str(seconds),
-             "-filter_complex", f"[0:v]{vf}[v]", "-map", "[v]", "-map", "1:a",
-             "-c:a", "aac", "-shortest", *ENC, seg])
-        parts.append(seg)
-    if not parts:
-        raise RuntimeError("Sem vídeos e sem imagens utilizáveis")
-    _concat(parts, out, tmp)
-    return _duration(out)
+        if 5 <= dur <= 120:  # vídeos curtos de demonstração
+            out.append(f"https://www.youtube.com/watch?v={vid}")
+    if p.returncode and not out:
+        print("  busca no YouTube falhou:", p.stderr[-200:])
+    return out
 
 
 def _concat(parts, out, tmp):
@@ -104,35 +103,53 @@ def _ensure_audio(path, tmp):
     return fixed
 
 
-def build_base(product, tmp):
-    """Monta a 'base visual' juntando até MAX_CLIPS vídeos reais. Retorna (arquivo, tipo)."""
-    parts, total = [], 0.0
-    for i, url in enumerate(product.get("videos", [])):
-        if len(parts) >= C.MAX_CLIPS:
+class NoVideo(Exception):
+    pass
+
+
+def _collect(urls, tmp, parts, prefix, loader):
+    for i, url in enumerate(urls):
+        if len(parts) >= max(C.MAX_CLIPS, 1):
             break
-        seg = os.path.join(tmp, f"clip{i}.mp4")
+        seg = os.path.join(tmp, f"{prefix}{i}.mp4")
         try:
-            d = _clip_from_url(url, seg)
+            d = loader(url, seg)
             if d >= 2.5:
-                parts.append(_ensure_audio(seg, tmp)); total += d
-                print(f"  clip ok ({d:.1f}s): {url[:80]}...")
+                parts.append(_ensure_audio(seg, tmp))
+                print(f"  clip ok ({d:.1f}s): {url[:80]}")
         except Exception as e:  # noqa: BLE001
             print("  clip falhou:", str(e)[:200])
-    if not parts and C.MAX_CLIPS > 0:
-        for vid in product.get("youtube_ids", [])[:1]:
-            seg = os.path.join(tmp, "yt.mp4")
-            try:
-                if _clip_from_youtube(vid, seg, tmp) >= 2.5:
-                    parts.append(_ensure_audio(seg, tmp))
-            except Exception as e:  # noqa: BLE001
-                print("  youtube falhou:", str(e)[:200])
+
+
+def build_base(product, tmp):
+    """O vídeo REAL do produto é obrigatório. Ordem de busca:
+    1) vídeos do anúncio escolhido (vendedor + avaliações)
+    2) vídeos de OUTROS anúncios do mesmo produto no Mercado Livre
+    3) vídeo do YouTube embutido no anúncio
+    4) busca no YouTube pelo nome do produto
+    Se nada der certo -> NoVideo (o fluxo pula para o próximo produto)."""
+    from . import mercadolivre as ml
+    parts = []
+    _collect(product.get("videos", []), tmp, parts, "clip", _clip_from_url)
+    source = "anuncio"
+    if not parts:
+        print("  sem vídeo no anúncio -> procurando em outros anúncios do mesmo produto...")
+        _collect(ml.find_videos_other_listings(product["title"], product.get("id")), tmp, parts, "alt", _clip_from_url)
+        source = "outro-anuncio"
+    if not parts and product.get("youtube_ids"):
+        _collect(product["youtube_ids"][:2], tmp, parts, "yt", lambda u, o: _clip_from_youtube(u, o, tmp))
+        source = "youtube-anuncio"
+    if not parts and C.ALLOW_YOUTUBE_SEARCH:
+        q = ml.search_query(product["title"], 6)
+        print(f"  procurando no YouTube: '{q}'...")
+        urls = youtube_search(q + " shorts") or youtube_search(q)
+        _collect(urls[:5], tmp, parts, "yts", lambda u, o: _clip_from_youtube(u, o, tmp))
+        source = "youtube-busca"
+    if not parts:
+        raise NoVideo("nenhum vídeo real do produto encontrado")
     base = os.path.join(tmp, "base.mp4")
-    if parts:
-        _concat(parts, base, tmp)
-        return base, "video"
-    print("  sem vídeo real -> usando slideshow das fotos")
-    _slideshow(product.get("images", []), base, tmp)
-    return base, "fotos"
+    _concat(parts, base, tmp)
+    return base, source
 
 
 # ---------------- legendas (ASS) ----------------
@@ -194,8 +211,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # ---------------- render final ----------------
 
-def render(product, narration_mp3, narration_dur, words, hook, out_path, tmp):
-    base, kind = build_base(product, tmp)
+def render(base, narration_mp3, narration_dur, words, hook, out_path, tmp):
     total = min(narration_dur + 0.8, C.MAX_SHORT_SECONDS)
     ass = os.path.join(tmp, "subs.ass")
     make_ass(words, hook, total, ass)
@@ -223,4 +239,4 @@ def render(product, narration_mp3, narration_dur, words, hook, out_path, tmp):
          "-filter_complex", ";".join([vf] + amix),
          "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.2f}",
          *ENC, "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-movflags", "+faststart", out_path])
-    return out_path, kind, total
+    return out_path, total
