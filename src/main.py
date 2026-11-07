@@ -134,6 +134,8 @@ def process(cand, history):
         from . import youtube
         vid = youtube.upload(out, title, desc, meta["tags"])
 
+    if C.DRY_RUN:
+        return None  # teste: não marca o produto como usado
     history.append({"id": p["id"], "url": p["url"], "label": meta["product_label"], "title": title,
                     "youtube_id": vid, "base": kind, "seconds": round(total, 1),
                     "date": NOW.isoformat(timespec="seconds")})
@@ -142,6 +144,9 @@ def process(cand, history):
 
 
 def main():
+    if not C.DRY_RUN and not (C.YT_CLIENT_ID and C.YT_CLIENT_SECRET and C.YT_REFRESH_TOKEN):
+        print("AVISO: secrets do YouTube não configurados -> modo teste (só gera o vídeo).")
+        C.DRY_RUN = True
     history = load_history()
     ranked = pick_products(history, C.VIDEOS_PER_RUN)
     done = 0
