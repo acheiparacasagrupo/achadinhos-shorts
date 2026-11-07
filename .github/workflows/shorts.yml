@@ -48,6 +48,7 @@ jobs:
 
       - name: Gerar e publicar Shorts
         env:
+          PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
@@ -62,7 +63,7 @@ jobs:
           ALLOW_YOUTUBE_SEARCH: ${{ vars.ALLOW_YOUTUBE_SEARCH }}
           DRY_RUN: ${{ github.event.inputs.dry_run || vars.DRY_RUN || 'false' }}
           VIDEOS_PER_RUN: ${{ github.event.inputs.videos || vars.VIDEOS_PER_RUN || '1' }}
-        run: python -m src.main
+        run: python -u -m src.main
 
       - name: Salvar vídeo gerado (Artifacts)
         if: always()
