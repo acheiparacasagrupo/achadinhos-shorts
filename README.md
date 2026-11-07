@@ -6,8 +6,12 @@ Esse fluxo roda sozinho no **GitHub Actions** (sem n8n, sem servidor), 3 vezes p
 Mercado Livre (mais vendidos de Casa + buscas virais)
       │  Gemini sugere termos virais e escolhe os produtos que RESOLVEM DORES
       ▼
-Página do produto → pega os VÍDEOS REAIS (clips do vendedor + vídeos de avaliações)
-      │  (se não tiver vídeo: slideshow das fotos com zoom)
+VÍDEO REAL DO PRODUTO é obrigatório. Ordem de busca:
+      │  1) vídeos do anúncio escolhido (vendedor + avaliações)
+      │  2) vídeos de OUTROS anúncios do mesmo produto no Mercado Livre
+      │  3) vídeo do YouTube embutido no anúncio
+      │  4) busca no YouTube pelo nome do produto
+      │  sem vídeo em nenhum lugar → pula para o próximo produto
       ▼
 Gemini escreve: gancho com a DOR → solução → benefícios → CTA do grupo do WhatsApp
       ▼
@@ -73,6 +77,9 @@ YouTube Data API → publica com título, descrição e tags no modelo do canal 
 | `VIDEOS_PER_RUN` | `1` | |
 | `DRY_RUN` | `true` = só gera, não publica | |
 | `GEMINI_MODELS` | lista de modelos em ordem, se o padrão mudar | |
+| `ALLOW_YOUTUBE_SEARCH` | `true` (padrão) / `false` = não buscar vídeo no YouTube | |
+
+**Secret opcional `YT_COOKIES`:** o YouTube às vezes bloqueia downloads vindos dos servidores do GitHub ("confirme que você não é um robô"). Se aparecer isso no log, exporte os cookies do YouTube de uma conta **secundária** com a extensão "Get cookies.txt LOCALLY" e cole o conteúdo no secret `YT_COOKIES`.
 
 ### 5. Primeiro teste
 1. Aba **Actions** → *Achadinhos Shorts (automático)* → **Run workflow** → `dry_run = true` → Run.
@@ -116,6 +123,8 @@ Para mudar o texto fixo, edite `build_description()` em `src/main.py`. Para muda
 | Sintoma no log | Causa / solução |
 |---|---|
 | `Nenhum candidato` / `HTTP 403` no Mercado Livre | O ML bloqueou o IP do servidor do GitHub naquele horário. Tente de novo; se for frequente, use um **runner no seu próprio PC** (grátis): *Settings → Actions → Runners → New self-hosted runner* e troque `runs-on: ubuntu-latest` por `runs-on: self-hosted`. |
+| `nenhum vídeo real do produto encontrado` | Normal de vez em quando: o fluxo pula para o próximo produto do ranking. |
+| `Sign in to confirm you're not a bot` (yt-dlp) | Configure o secret `YT_COOKIES` (veja passo 4). |
 | `edge-tts falhou` | Usa o Gemini TTS sozinho como plano B. |
 | `Gemini: modelo X falhou` | Modelo descontinuado ou cota do minuto; ele tenta o próximo da lista `GEMINI_MODELS`. |
 | `invalid_grant` no upload | Token expirou: o app ficou em "Teste". Publique o app (passo 3.3) e gere o token de novo. |
@@ -125,7 +134,7 @@ Para mudar o texto fixo, edite `build_description()` em `src/main.py`. Para muda
 O arquivo `data/history.json` guarda tudo que já foi publicado (o fluxo não repete produto por 90 dias).
 
 ## ⚠️ Direitos de imagem
-Os vídeos usados são do próprio anúncio (vendedor) e das avaliações de compradores no Mercado Livre. É prática comum em perfis de achadinhos, mas o dono do vídeo pode pedir a remoção. Para reduzir o risco, o fluxo corta trechos curtos, reenquadra, tira o áudio original e põe narração e legendas próprias. Se receber reivindicação, apague o vídeo; para zerar o risco, use `MAX_CLIPS=0` (só slideshow das fotos).
+Os vídeos vêm dos anúncios (vendedores), de avaliações de compradores e, em último caso, do YouTube. É prática comum em perfis de achadinhos, mas o dono do vídeo pode reivindicar ou pedir remoção — o risco é maior com vídeos do YouTube (Content ID). Para reduzir, o fluxo usa trechos curtos, reenquadra, tira o áudio original e põe narração e legendas próprias. Se quiser evitar vídeos do YouTube, use `ALLOW_YOUTUBE_SEARCH=false`.
 
 ## Estrutura
 ```
